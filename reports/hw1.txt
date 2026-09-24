@@ -1,0 +1,40 @@
+Делаю всё в одном проекте parser-job, т.к. мое итоговое приложение это парсер вакансий.
+
+Создал Каркас Spring Boot в виде проекта parser-job, главный класс с @SpringBootApplication.
+
+Сервис CounterService с методом printInfo, печатает имя потока и номер.
+
+Поток через Thread - CounterWorker, имя задаю в super("CounterWorker"), в run() цикл из 5 итераций со sleep(200).
+
+Поток через Runnable - LoggerThread, имя задаю при создании потока new Thread(..., "LoggerThread"), внутри беру через Thread.currentThread().getName(), sleep(300).
+
+Запуск - ThreadDemoRunner implements CommandLineRunner: стартую оба потока, жду через join(), вывожу активные потоки через Thread.getAllStackTraces().keySet().
+
+Результат
+=== Запуск демонстрации потоков ===
+Поток: CounterWorker, номер: 1
+Поток: LoggerThread, номер: 1
+Поток: CounterWorker, номер: 2
+Поток: LoggerThread, номер: 2
+Поток: CounterWorker, номер: 3
+Поток: LoggerThread, номер: 3
+Поток: CounterWorker, номер: 4
+Поток: CounterWorker, номер: 5
+Поток: LoggerThread, номер: 4
+Поток: LoggerThread, номер: 5
+=== Потоки завершены ===
+=== Активные потоки ===
+Имя: Finalizer, состояние: WAITING, daemon: true
+Имя: main, состояние: RUNNABLE, daemon: false
+Имя: Reference Handler, состояние: RUNNABLE, daemon: true
+Имя: Signal Dispatcher, состояние: RUNNABLE, daemon: true
+Имя: Common-Cleaner, состояние: TIMED_WAITING, daemon: true
+Имя: Monitor Ctrl-Break, состояние: RUNNABLE, daemon: true
+Имя: Notification Thread, состояние: RUNNABLE, daemon: true
+
+Process finished with exit code 0
+
+
+Порядок строк чередуется, следовательно, потоки работают параллельно. CounterWorker завершается раньше из-за меньшей задержки. Самих рабочих потоков в списке уже нет — они завершились до вывода, потому что перед этим стоит join().
+
+Таким образом, оба варианта создания потоков работают, имена и номера выводятся, список активных потоков есть.
