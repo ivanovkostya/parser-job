@@ -1,0 +1,35 @@
+Делаю всё в том же проекте parser-job.
+
+В пакет task/state добавил классы для вывода состояний.
+
+SleepingTask extends Thread - в run() вызываю Thread.sleep(5000), получаем поток в TIMED_WAITING.
+
+WaitingTask extends Thread - в run() внутри synchronized(lock) вызываю lock.wait(), получаем поток в WAITING.
+
+BlockedTask extends Thread - в run() внутри synchronized(lock) вызываю Thread.sleep(3000) для получения блокировки. Запускаю два таких потока с одним и тем же lock, второй поток уходит в BLOCKED.
+
+StateDemoRunner implements CommandLineRunner - создаю потоки, печатаю их состояния до start(), потом после start(), потом после join().
+
+Результат
+=== Демонстрация состояний потоков ===
+--- После создания ---
+SleepingTask: NEW
+WaitingTask: NEW
+BlockedTask: NEW
+BlockedTask: NEW
+--- Во время работы ---
+SleepingTask: TIMED_WAITING
+WaitingTask: WAITING
+BlockedTask: TIMED_WAITING
+BlockedTask: BLOCKED
+--- После завершения ---
+SleepingTask: TERMINATED
+WaitingTask: TERMINATED
+BlockedTask: TERMINATED
+BlockedTask: TERMINATED
+
+Process finished with exit code 0
+
+В выводе видны состояния NEW, TIMED_WAITING, WAITING, BLOCKED, TERMINATED. RUNNABLE не поймал - оно мелькает слишком быстро между проверками, а специальный поток для его демонстрации добавлять не стал.
+
+BLOCKED возникает только при борьбе за synchronized, второй BlockedTask ждёт, пока первый держит lock. WAITING и TIMED_WAITING отличаются только тем что во втором случае есть таймаут (sleep, wait с временем), а в первом поток ждёт бесконечно, пока его не разбудят через notifyAll.
