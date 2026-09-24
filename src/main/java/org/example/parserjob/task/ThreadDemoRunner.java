@@ -4,7 +4,7 @@ import org.example.parserjob.service.CounterService;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
-@Component
+// @Component
 public class ThreadDemoRunner implements CommandLineRunner {
 
     private final CounterService counterService;
