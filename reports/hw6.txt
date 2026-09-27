@@ -1,0 +1,46 @@
+В пакет task/atomic добавил классы:
+
+StoppableTask - поток с флагом stopped, помеченным volatile. В run() бесконечный цикл while (!stopped), счётчик итераций. Метод stopWork() устанавливает флаг в true.
+AtomicCounter - счётчик на AtomicInteger. Метод increment() вызывает incrementAndGet(), метод get() возвращает текущее значение.
+AtomicCache - singleton-кэш на AtomicReference<String>. Метод getOrCreate() сначала читает значение, если null - создаёт новое и пытается установить через compareAndSet. Если не получилось (кто-то успел раньше), возвращает то, что уже лежит.
+AtomicController - REST-контроллер с четырьмя эндпоинтами.
+
+Как проверять
+Запустить ParserJobApplication и открыть в браузере:
+
+http://localhost:8080/volatile-stop
+http://localhost:8080/atomic-counter
+http://localhost:8080/atomic-counter/unsafe
+http://localhost:8080/atomic-cache
+
+Результат
+/volatile-stop:
+{"stopped":true,"iterations":624269710}
+
+/atomic-counter:
+{"expected":800000,"actual":800000}
+
+/atomic-counter/unsafe:
+{"lost":584599,"actual":215401,"expected":800000}
+
+/atomic-cache:
+{"value":"cached-1790523886459","uniqueValues":1}
+
+Поток StoppableTask успешно остановился по флагу volatile - stopped = true, за ~200 мс успел накрутить 624 миллиона итераций. Это подтверждает, что volatile обеспечивает видимость изменения флага между потоками.
+AtomicCounter дал ровно 800000 - потерь нет. Обычный int в unsafe-варианте потерял 584599 инкрементов из 800000 (73%) - классическая гонка данных. Это показывает, зачем нужны Atomic-классы.
+AtomicCache вернул 1 уникальное значение из 8 потоков - singleton работает, все потоки получили один и тот же объект.
+
+Использование volatile, AtomicInteger, AtomicReference
+volatile - гарантирует, что изменение переменной сразу видно всем потокам. Без volatile поток мог бы закэшировать значение stopped = false в своём стеке и никогда не увидеть изменения. volatile не даёт атомарности для составных операций (например, count++), но идеально подходит для флага остановки.
+AtomicInteger - обеспечивает атомарные операции над int без явных блокировок. incrementAndGet() реализован через CAS (compare-and-swap) на уровне процессора. Это быстрее, чем synchronized, потому что нет блокировки потока.
+AtomicReference - то же самое, но для ссылок на объекты. compareAndSet(expected, newValue) атомарно проверяет, что текущее значение равно expected, и только тогда устанавливает newValue. Это позволяет реализовать lock-free singleton.
+
+Корректные и некорректные ситуации
+Корректно: 8 потоков вызывают AtomicCounter.increment() - итог ровно 800000.
+Некорректно: 8 потоков делают count++ над обычным int - потеряно 584599 из 800000 из-за гонки.
+Корректно: 8 потоков вызывают AtomicCache.getOrCreate() - все получают один и тот же объект благодаря compareAndSet.
+Некорректно: два потока одновременно проверяют if (cache == null), оба создают объект, один затирает другой - получится два разных singleton-объекта.
+
+Вывод
+volatile подходит для флагов и простых переменных, где нужно только видеть изменения. AtomicInteger и AtomicReference дают атомарность без блокировок и работают быстрее synchronized на простых операциях. Для счётчиков и singleton-кэшей это оптимальный выбор. Но Atomic не покрывает составные операции над несколькими переменными - там всё ещё нужны блокировки или транзакции.
+
