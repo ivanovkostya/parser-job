@@ -1,0 +1,53 @@
+В пакет task/future добавил LongTask и ShortTask, в service - PeriodicDataAggregator, в controller - FutureController.
+
+LongTask - Callable<String>, имитирует долгую работу через цикл со sleep. Проверяет isInterrupted(), чтобы можно было отменить через cancel(true).
+
+ShortTask - Callable<Integer>, спит случайное время 1-3 сек, возвращает id * 100.
+
+FutureController - REST-контроллер с эндпоинтами для отмены задачи, invokeAll и управления агрегатором.
+
+PeriodicDataAggregator - сервис, который каждые N секунд берёт список валют (USD, EUR, GBP, JPY, CNY), асинхронно запрашивает данные через CompletableFuture.runAsync на отдельном пуле, успешные результаты пишет в ConcurrentHashMap. Имитация источника: спит 200-500 мс и с вероятностью 20% кидает исключение.
+
+Как проверять
+Запустить ParserJobApplication и открыть в браузере:
+
+http://localhost:8080/future/cancel
+http://localhost:8080/future/invoke-all
+http://localhost:8080/aggregator/start
+http://localhost:8080/aggregator/status
+
+Результат
+
+/future/cancel:
+{"cancelled":true,"isCancelled":true,"isDone":true,"result":"CancellationException - задача отменена"}
+
+/future/invoke-all:
+{"totalTasks":5,"totalTimeMs":2625,"results":[{"taskId":1,"result":100},{"taskId":2,"result":200},{"taskId":3,"result":300},{"taskId":4,"result":400},{"taskId":5,"result":500}]}
+
+/aggregator/status (после ~30 секунд работы):
+{"successCount":26,"failCount":4,"cacheSize":5,"cache":{"JPY":"JPY=183","EUR":"EUR=128","GBP":"GBP=185","USD":"USD=130","CNY":"CNY=156"}}
+
+Долгая задача (8 сек) отменена через 2.5 сек - cancel(true) вернул true, при get() выбросилось CancellationException. Внутри LongTask поток увидел isInterrupted() и корректно завершился.
+
+invokeAll запустил 5 задач параллельно на пуле из 5 потоков. Каждая спала 1-3 сек. Общее время - 2625 мс, а не сумма всех (~10 сек), потому что задачи работали одновременно.
+
+Агрегатор отработал 6 циклов по 5 секунд. Успешных запросов - 26, ошибок - 4 (около 13%). Все 5 валют попали в кэш. Кэш в ConcurrentHashMap, счётчики в AtomicInteger, потому что к ним обращаются несколько потоков.
+
+Future и cancel()
+Future - «обещание» результата. cancel(true) прерывает задачу через Thread.interrupt(). Если задача проверяет isInterrupted() или спит, она завершится. Без проверки cancel(true) не остановит задачу.
+
+invokeAll
+Блокирует вызывающий поток, пока все задачи не завершатся. Возвращает список Future в том же порядке, что и входной список.
+
+ScheduledExecutorService
+scheduleAtFixedRate запускает задачу с фиксированной периодичностью. Первый запуск - сразу, потом каждые N секунд. Для фоновых операций - идеальный инструмент.
+
+Корректные и некорректные ситуации
+Корректно: cancel(true) + проверка isInterrupted() - задача отменяется.
+Некорректно: cancel(true) без проверки - задача продолжит работу.
+Корректно: invokeAll на пуле размером >= количество задач - все идут параллельно.
+Некорректно: invokeAll на пуле из 1 потока - задачи последовательны.
+
+Вывод
+Future и cancel() дают контроль над асинхронными задачами. invokeAll удобен для пакетного запуска. ScheduledExecutorService - для периодических фоновых операций. PeriodicDataAggregator показывает работу, каждые N секунд опрашиваем внешние источники, успешные пишем в кэш, ошибки игнорируем.
+
