@@ -1,0 +1,60 @@
+В пакет config добавил ThreadPoolConfig, в task/http - HttpResult и HttpFetcher, в controller - HttpController.
+
+ThreadPoolConfig - кастомный ThreadPoolExecutor с параметрами: corePoolSize = 4, maximumPoolSize = 8, keepAliveTime = 60 сек, очередь LinkedBlockingQueue на 100 задач, своя ThreadFactory с именами http-worker-N, и CallerRunsPolicy при переполнении. Spring создаёт бин через @Bean и останавливает пул при завершении через destroyMethod = "shutdown".
+
+HttpResult - результат одного запроса: url, status, timeMs, error. Статические фабрики ok() и fail() для удобства.
+
+HttpFetcher - обёртка над java.net.http.HttpClient из JDK. Таймаут подключения 5 сек, таймаут запроса 5 сек, следует за редиректами. Замеряет время через System.nanoTime() до и после запроса. При исключении возвращает HttpResult.fail().
+
+HttpController - REST-контроллер с эндпоинтом /fetch. Принимает список URL (если не передан - берёт 20 публичных API GitHub по умолчанию). Отправляет все задачи в ThreadPoolExecutor через submit(), собирает результаты через Future.get(), считает статистику (ok, failed, min, max, avg время) и возвращает сводку.
+
+Как проверять
+Запустить ParserJobApplication и открыть в браузере:
+
+http://localhost:8080/fetch
+
+Можно передать свой список URL:
+
+http://localhost:8080/fetch?urls=https://api.github.com&urls=https://api.github.com/users/octocat
+
+Результат
+{
+"totalUrls": 20,
+"ok": 20,
+"failed": 0,
+"totalTimeMs": 2409,
+"minTimeMs": 261,
+"maxTimeMs": 663,
+"avgTimeMs": 407,
+"poolSize": 4,
+"queueSize": 0,
+"details": [
+{"url": "https://api.github.com/repos/kubernetes/kubernetes", "status": 200, "timeMs": 261},
+{"url": "https://api.github.com/repos/python/cpython", "status": 200, "timeMs": 293},
+{"url": "https://api.github.com/repos/rust-lang/rust", "status": 200, "timeMs": 296},
+...
+{"url": "https://api.github.com/repos/facebook/react", "status": 200, "timeMs": 663}
+]
+}
+
+Все 20 запросов выполнены успешно, ошибок нет. Средний ответ - 407 мс, но общее время - 2409 мс, а не 20 * 407 = 8140 мс. Потому что запросы шли параллельно на 4 потоках. Ускорение примерно в 3.4 раза.
+
+poolSize = 4 - пул не разворачивался до 8, потому что 4 core-потоков хватило, и очередь не переполнялась. queueSize = 0 - все задачи выполнены, очередь пуста. Это правильное поведение: ThreadPoolExecutor создаёт новые потоки только когда очередь заполнена, а у нас 20 задач при очереди на 100.
+
+Как настроен ThreadPoolExecutor
+corePoolSize = 4 - базовое количество потоков, которые живут всегда.
+maximumPoolSize = 8 - при нагрузке пул расширяется до 8 потоков.
+keepAliveTime = 60 сек - лишние потоки (сверх core) завершаются через 60 сек простоя.
+LinkedBlockingQueue(100) - очередь задач. Пока есть место в очереди, новые потоки не создаются сверх core.
+ThreadFactory - даёт потокам понятные имена http-worker-1, http-worker-2 и т.д. Это помогает в jstack и логах.
+CallerRunsPolicy - если очередь переполнена и все 8 потоков заняты, задача выполняется в вызывающем потоке. Это замедляет приток задач, но не теряет их.
+
+Корректные и некорректные ситуации
+Корректно: 20 URL отправлены через пул, все выполнены параллельно, время сократилось в 3.4 раза.
+Некорректно: если бы мы делали запросы в цикле последовательно, 20 * 407 = 8140 мс вместо 2409 мс.
+Некорректно: если бы пул был без ограничения очереди (Executors.newCachedThreadPool()), при 1000 URL создалось бы 1000 потоков и упала память.
+Корректно: LinkedBlockingQueue(100) + CallerRunsPolicy ограничивают нагрузку.
+
+Вывод
+Собственный ThreadPoolExecutor даёт полный контроль над параллелизмом: размер пула, очередь, поведение при переполнении, имена потоков. Для HTTP-запросов это важно, 20 запросов выполняются за время одного самого медленного, а не за сумму всех. CallerRunsPolicy защищает от переполнения очереди без потери задач. Такой подход будет использоваться в моем финальном проекте - парсере вакансий, где нужно параллельно опрашивать несколько источников.
+
