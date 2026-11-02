@@ -54,6 +54,13 @@ http://localhost:8080/h2-console
 @Scheduled запускает парсинг каждые 60 секунд (первый — через 5 секунд после старта).
 В консоли видно: [scheduler] сохранено новых вакансий: N.
 
+## Тесты
+В проекте есть Unit-тесты:
+- `VacancyControllerTest` — проверка эндпоинта `/answer`.
+- `VacancyRepositoryTest` — проверка сохранения и дедупликации в H2.
+
+Запуск: `./mvnw test`
+
 ## Многопоточность в проекте
 
 - ThreadPoolExecutor (AsyncExecutorConfig, 4 core / 8 max, именованные демон-потоки) — параллельный парсинг страниц.
