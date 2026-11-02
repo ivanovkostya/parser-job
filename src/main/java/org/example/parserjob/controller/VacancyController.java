@@ -3,7 +3,9 @@ package org.example.parserjob.controller;
 import org.example.parserjob.model.Vacancy;
 import org.example.parserjob.repository.VacancyRepository;
 import org.example.parserjob.service.VacancyParserService;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -21,8 +23,7 @@ public class VacancyController {
 
     @GetMapping("/parse")
     public Map<String, Object> parse(@RequestParam(defaultValue = "3") int pages) {
-        int saved = parser.parsePages(pages);
-        return Map.of("pages", pages, "saved", saved);
+        return Map.of("pages", pages, "saved", parser.parsePages(pages));
     }
 
     @GetMapping("/answer")
@@ -31,6 +32,12 @@ public class VacancyController {
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String city,
             @RequestParam(defaultValue = "postedDate") String sort) {
+
+        // Валидация параметров пагинации
+        if (page < 0 || size < 1 || size > 100) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Некорректные параметры пагинации");
+        }
 
         Comparator<Vacancy> cmp = switch (sort) {
             case "name" -> Comparator.comparing(Vacancy::getName);
@@ -44,8 +51,9 @@ public class VacancyController {
                 .sorted(cmp)
                 .collect(Collectors.toList());
 
-        int from = Math.min(page * size, filtered.size());
-        int to = Math.min(from + size, filtered.size());
+        // Защита от переполнения int
+        int from = (int) Math.min((long) page * size, filtered.size());
+        int to = (int) Math.min((long) from + size, filtered.size());
 
         return Map.of(
                 "total", filtered.size(),
