@@ -1,0 +1,47 @@
+Добавил:
+
+config/AsyncExecutorConfig - свой пул потоков.
+task/async/FinalResult - итоговый объект.
+service/DataFetchService - метод fetchAllDataAsync.
+controller/AsyncController - эндпоинты.
+
+DataFetchService.fetchAllDataAsync(ids) для каждого id запускает три CompletableFuture: имя, цена, курс. Цена и курс объединяются через thenCombine в финальную цену. Имя и финальная цена - через thenCombine в FinalResult. Ошибки - через handle(), при сбое возвращается FinalResult.fail(), остальные результаты не теряются.
+
+AsyncExecutorConfig - ThreadPoolExecutor, 4 core / 8 max, очередь на 100, именованные демон-потоки async-worker-N, destroyMethod = "shutdown".
+
+AsyncController - /async/fetch и /sync/fetch для сравнения.
+
+Как проверять
+Запустить ParserJobApplication и открыть:
+
+http://localhost:8080/async/fetch
+http://localhost:8080/sync/fetch
+
+Результат
+
+/async/fetch:
+{"type":"async","total":10,"ok":8,"failed":2,"timeMs":2368,"results":[{"id":"1","name":"Товар-1","finalPrice":706},{"id":"2","name":"Товар-2","finalPrice":862},{"id":"3","name":"Товар-3","finalPrice":718},{"id":"4","name":"Товар-4","finalPrice":827},{"id":"5","name":"Товар-5","finalPrice":330},{"id":"6","name":"Товар-6","finalPrice":359},{"id":"7","name":"Товар-7","finalPrice":382},{"id":"8","error":"источник имён недоступен для 8"},{"id":"9","name":"Товар-9","finalPrice":821},{"id":"10","error":"источник цен недоступен для 10"}]}
+
+/sync/fetch:
+{"type":"sync","total":10,"ok":9,"failed":1,"timeMs":4875,"results":[{"id":"1","name":"Товар-1","finalPrice":522},{"id":"2","name":"Товар-2","finalPrice":1090},{"id":"3","error":"источник цен недоступен для 3"},{"id":"4","name":"Товар-4","finalPrice":937},{"id":"5","name":"Товар-5","finalPrice":829},{"id":"6","name":"Товар-6","finalPrice":748},{"id":"7","name":"Товар-7","finalPrice":870},{"id":"8","name":"Товар-8","finalPrice":176},{"id":"9","name":"Товар-9","finalPrice":166},{"id":"10","name":"Товар-10","finalPrice":787}]}
+
+Асинхронная версия - 2368 мс, синхронная - 4875 мс. Ускорение примерно в 2 раза. В асинхронной 2 ошибки из 10, в синхронной 1 из 10, но остальные результаты вернулись в обоих случаях благодаря handle() и try/catch.
+
+Использование CompletableFuture
+supplyAsync(..., executor) - запуск в своём пуле.
+thenCombine(other, (a, b) -> ...) - объединение двух независимых результатов. У нас так соединяются цена + курс и имя + финальная цена.
+handle((res, ex) -> ...) - обработка и результата, и ошибки. Возвращает FinalResult даже при исключении.
+
+Обработка ошибок
+handle((res, ex) -> ...) даёт доступ и к успешному результату, и к исключению. При сбое возвращается FinalResult.fail(id, message), остальные результаты не теряются. В синхронной версии то же самое через try/catch.
+
+Собственный пул потоков
+corePoolSize = 4, maximumPoolSize = 8, очередь на 100 задач.
+Именованные демон-потоки async-worker-N.
+destroyMethod = "shutdown" - Spring корректно останавливает пул при завершении приложения.
+
+Сравнение async и sync
+Асинхронная версия быстрее в 2 раза на 10 id. Чем больше id, тем заметнее разница, потому что в синхронной версии время растёт линейно, а в асинхронной ограничено временем самого медленного запроса.
+
+Вывод
+CompletableFuture с явным пулом даёт контроль над асинхронностью: комбинирование (thenCombine), обработка ошибок (handle) без потери частичных результатов. Собственный пул с именованными демон-потоками удобен для отладки. Асинхронная версия в 2 раза быстрее синхронной.

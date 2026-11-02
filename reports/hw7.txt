@@ -1,0 +1,87 @@
+В пакет task/deadlock добавил классы:
+
+DeadlockDemo - два потока захватывают resourceA и resourceB в противоположном порядке. Thread-1: сначала A, потом B. Thread-2: сначала B, потом A. Оба зависают.
+
+LivelockDemo - два Worker-а бесконечно уступают друг другу: видят, что другой активен, и не начинают работу. Потоки живы, но прогресса нет.
+
+StarvationDemo - пять потоков-«нахалов» постоянно захватывают монитор, а один «голодающий» поток получает его крайне редко.
+
+DeadlockController - REST-контроллер с тремя эндпоинтами.
+
+Как проверять
+Запустить ParserJobApplication.
+
+Deadlock:
+Открыть http://localhost:8080/deadlock
+Найти PID: jps -l
+Снять дамп: jstack -l <PID> > thread_dump.txt
+Найти deadlock: grep -A 30 "Found one Java-level deadlock" thread_dump.txt
+Убить процесс: kill -9 <PID>
+
+Livelock:
+Открыть http://localhost:8080/livelock - в консоли бесконечные сообщения «уступаю».
+
+Starvation:
+Открыть http://localhost:8080/starvation - вернёт JSON с hogCount и starvingCount.
+
+Дамп потоков (jstack)
+Found one Java-level deadlock:
+=============================
+"Deadlock-Thread-1":
+waiting to lock monitor 0x0000757ac8002770 (object 0x00000007ffe18ec8, a java.lang.Object),
+which is held by "Deadlock-Thread-2"
+
+"Deadlock-Thread-2":
+waiting to lock monitor 0x0000757abc175bf0 (object 0x00000007ffe18eb8, a java.lang.Object),
+which is held by "Deadlock-Thread-1"
+
+Java stack information for the threads listed above:
+===================================================
+"Deadlock-Thread-1":
+at org.example.parserjob.task.deadlock.DeadlockDemo.lambda$startDeadlock$0(DeadlockDemo.java:15)
+
+waiting to lock <0x00000007ffe18ec8> (a java.lang.Object)
+
+locked <0x00000007ffe18eb8> (a java.lang.Object)
+at java.lang.Thread.runWith(java.base@25.0.4.1/Thread.java:1487)
+at java.lang.Thread.run(java.base@25.0.4.1/Thread.java:1474)
+"Deadlock-Thread-2":
+at org.example.parserjob.task.deadlock.DeadlockDemo.lambda$startDeadlock$1(DeadlockDemo.java:26)
+
+waiting to lock <0x00000007ffe18eb8> (a java.lang.Object)
+
+locked <0x00000007ffe18ec8> (a java.lang.Object)
+at java.lang.Thread.runWith(java.base@25.0.4.1/Thread.java:1487)
+at java.lang.Thread.run(java.base@25.0.4.1/Thread.java:1474)
+
+Found 1 deadlock.
+
+Анализ дампа
+В дампе видно, что JVM сама обнаружила deadlock и вывела «Found one Java-level deadlock».
+
+Thread-1 держит ресурс 0x...eb8 (locked) и ждёт ресурс 0x...ec8 (waiting to lock). Thread-2 держит ресурс 0x...ec8 и ждёт 0x...eb8. Получается circular wait: каждый поток держит один ресурс и ждёт второй, который держит другой поток.
+
+Состояние потоков: BLOCKED (on object monitor). Потоки стоят на строках DeadlockDemo.java:15 и :26 - это внутренние synchronized-блоки. Ни один из них не может продолжить работу, потому что оба ждут освобождения монитора, который не будет освобождён.
+
+Без jstack эту ситуацию сложно заметить: приложение просто висит и не отвечает. jstack показывает, какие именно потоки заблокированы и на каких объектах.
+
+Результат Starvation
+{"hogCount":11013695,"starvingCount":1708137,"note":"у starvingCount будет намного меньше операций"}
+
+Пять потоков-«нахалов» вместе выполнили 11 013 695 операций, а один голодающий - 1 708 137. Если бы доступ к монитору был честным, каждый из 6 потоков получил бы примерно 2 120 305 операций. Голодающий получил на 20% меньше - это и есть starvation: потоки-«нахала» постоянно перехватывают монитор, и голодающий систематически проигрывает в борьбе за блокировку.
+
+Предотвращение Deadlock, Livelock, Starvation
+Deadlock - упорядоченная аллокация ресурсов. Всегда захватывать ресурсы в одном порядке. Например, по хэшу объекта или по id. Если оба потока захватывают сначала A, потом B, deadlock невозможен.
+
+Livelock - тайм-ауты. Если поток уступает слишком долго, нужно через какое-то время перестать уступать и попробовать ещё раз с задержкой. Или использовать случайные задержки, чтобы потоки не синхронизировались в уступании.
+
+Starvation - fair lock. ReentrantLock с fairness = true гарантирует, что поток, дольше всех ждущий, получит блокировку. Также можно использовать Thread.yield() и не злоупотреблять приоритетами потоков.
+
+Корректные и некорректные ситуации
+Корректно: два потока захватывают A и B в одном порядке (A → B). Deadlock нет.
+Некорректно: два потока захватывают A и B в разном порядке. Deadlock, что подтверждает дамп jstack.
+Корректно: потоки используют ReentrantLock(true) - fair mode. Starvation нет.
+Некорректно: пять потоков постоянно захватывают synchronized-блок, один поток голодает - starvingCount на 20% меньше ожидаемого.
+
+Вывод
+Deadlock, livelock и starvation - три разные проблемы многопоточности. Deadlock диагностируется через jstack: JVM сама находит circular wait и выводит «Found one Java-level deadlock», показывая, какие потоки заблокированы и на каких объектах. Предотвращение: единый порядок захвата ресурсов, тайм-ауты, fair locks. Livelock и starvation сложнее заметить, потому что потоки живы, но прогресса нет или он односторонний.
