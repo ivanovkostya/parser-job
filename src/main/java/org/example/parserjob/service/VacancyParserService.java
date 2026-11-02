@@ -1,11 +1,11 @@
 package org.example.parserjob.service;
 
-
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import tools.jackson.databind.ObjectMapper;
 import org.example.parserjob.model.Vacancy;
 import org.example.parserjob.repository.VacancyRepository;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
@@ -15,6 +15,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 @Service
@@ -29,6 +30,8 @@ public class VacancyParserService {
             .build();
     private final ObjectMapper mapper = new ObjectMapper();
 
+    private final AtomicBoolean isParsing = new AtomicBoolean(false);
+
     public VacancyParserService(VacancyRepository repository,
                                 @Qualifier("asyncExecutor") ExecutorService executor) {
         this.repository = repository;
@@ -36,20 +39,51 @@ public class VacancyParserService {
     }
 
     public int parsePages(int pages) {
-        List<CompletableFuture<List<Vacancy>>> futures = new ArrayList<>();
-        for (int p = 1; p <= pages; p++) {
-            final int page = p;
-            futures.add(CompletableFuture.supplyAsync(() -> parsePage(page), executor));
+        if (!isParsing.compareAndSet(false, true)) {
+            System.out.println("[parser] Парсинг уже выполняется, пропускаем запрос.");
+            return 0;
         }
 
-        List<Vacancy> toSave = futures.stream()
-                .map(CompletableFuture::join)
-                .flatMap(List::stream)
-                .filter(v -> !repository.existsByExternalId(v.getExternalId()))
-                .collect(Collectors.toList());
+        try {
+            List<CompletableFuture<List<Vacancy>>> futures = new ArrayList<>();
+            for (int p = 1; p <= pages; p++) {
+                final int page = p;
+                // Обработка исключений для каждой страницы
+                futures.add(CompletableFuture.supplyAsync(() -> parsePage(page), executor)
+                        .exceptionally(ex -> {
+                            System.err.println("[parser] Ошибка загрузки страницы " + page + ": " + ex.getMessage());
+                            return List.of(); // Возвращаем пустой список, чтобы не ронять весь стрим
+                        }));
+            }
 
-        repository.saveAll(toSave);
-        return toSave.size();
+            List<Vacancy> allFetched = futures.stream()
+                    .map(CompletableFuture::join) // Здесь уже не будет исключений, так как они обработаны в exceptionally
+                    .flatMap(List::stream)
+                    .collect(Collectors.toList());
+
+            // Убираем дубликаты внутри текущего запроса
+            Map<String, Vacancy> uniqueMap = new LinkedHashMap<>();
+            for (Vacancy v : allFetched) {
+                uniqueMap.put(v.getExternalId(), v);
+            }
+            List<Vacancy> toSave = new ArrayList<>(uniqueMap.values());
+
+            int savedCount = 0;
+            for (Vacancy v : toSave) {
+                try {
+                    // 2. Используем saveAndFlush для немедленного срабатывания constraint
+                    repository.saveAndFlush(v);
+                    savedCount++;
+                } catch (DataIntegrityViolationException e) {
+                    System.out.println("[parser] Дубликат пропущен: " + v.getExternalId());
+                } catch (Exception e) {
+                    System.err.println("[parser] Ошибка сохранения " + v.getExternalId() + ": " + e.getMessage());
+                }
+            }
+            return savedCount;
+        } finally {
+            isParsing.set(false);
+        }
     }
 
     private List<Vacancy> parsePage(int page) {
@@ -62,7 +96,12 @@ public class VacancyParserService {
                     .build();
 
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() != 200) return List.of();
+
+            // логирование HTTP-ошибок
+            if (resp.statusCode() != 200) {
+                System.err.println("[parser] HTTP " + resp.statusCode() + " при загрузке страницы " + page);
+                return List.of();
+            }
 
             HabrResponse r = mapper.readValue(resp.body(), HabrResponse.class);
             if (r == null || r.list == null) return List.of();
@@ -72,7 +111,7 @@ public class VacancyParserService {
                     .filter(Objects::nonNull)
                     .collect(Collectors.toList());
         } catch (Exception e) {
-            System.out.println("[parser] ошибка страницы " + page + ": " + e.getMessage());
+            System.err.println("[parser] Исключение при загрузке страницы " + page + ": " + e.getMessage());
             return List.of();
         }
     }
@@ -92,8 +131,6 @@ public class VacancyParserService {
 
         return new Vacancy(String.valueOf(h.id), h.title, company, city, salary, req, date);
     }
-
-    // === POJO для Habr Career ===
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class HabrResponse {
