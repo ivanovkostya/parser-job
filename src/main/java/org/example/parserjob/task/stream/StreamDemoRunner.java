@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Random;
 import java.util.stream.Collectors;
 
-@Component
+//@Component
 public class StreamDemoRunner implements CommandLineRunner {
 
     private static final int SIZE = 1_000_000;
