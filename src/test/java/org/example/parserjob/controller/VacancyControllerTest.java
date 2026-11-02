@@ -30,11 +30,9 @@ class VacancyControllerTest {
 
     @Test
     void shouldReturnVacanciesList() throws Exception {
-        // моковые данные
         Vacancy v = new Vacancy("1", "Java Developer", "Company", "Москва", "100k", "Spring", "2026-11-02");
         when(repository.findAll()).thenReturn(List.of(v));
 
-        // Выполняем GET /answer
         mockMvc.perform(get("/answer?page=0&size=10"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(1))

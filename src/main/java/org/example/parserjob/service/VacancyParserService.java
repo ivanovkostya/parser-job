@@ -7,12 +7,8 @@ import org.example.parserjob.repository.VacancyRepository;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -25,9 +21,9 @@ public class VacancyParserService {
 
     private final VacancyRepository repository;
     private final ExecutorService executor;
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .build();
+
+    // Используем RestTemplate
+    private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper mapper = new ObjectMapper();
 
     private final AtomicBoolean isParsing = new AtomicBoolean(false);
@@ -48,16 +44,16 @@ public class VacancyParserService {
             List<CompletableFuture<List<Vacancy>>> futures = new ArrayList<>();
             for (int p = 1; p <= pages; p++) {
                 final int page = p;
-                // Обработка исключений для каждой страницы
+                // Обработка исключений
                 futures.add(CompletableFuture.supplyAsync(() -> parsePage(page), executor)
                         .exceptionally(ex -> {
                             System.err.println("[parser] Ошибка загрузки страницы " + page + ": " + ex.getMessage());
-                            return List.of(); // Возвращаем пустой список, чтобы не ронять весь стрим
+                            return List.of();
                         }));
             }
 
             List<Vacancy> allFetched = futures.stream()
-                    .map(CompletableFuture::join) // Здесь уже не будет исключений, так как они обработаны в exceptionally
+                    .map(CompletableFuture::join)
                     .flatMap(List::stream)
                     .collect(Collectors.toList());
 
@@ -71,7 +67,6 @@ public class VacancyParserService {
             int savedCount = 0;
             for (Vacancy v : toSave) {
                 try {
-                    // 2. Используем saveAndFlush для немедленного срабатывания constraint
                     repository.saveAndFlush(v);
                     savedCount++;
                 } catch (DataIntegrityViolationException e) {
@@ -89,21 +84,13 @@ public class VacancyParserService {
     private List<Vacancy> parsePage(int page) {
         try {
             String url = BASE + "?page=" + page + "&per_page=25";
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofSeconds(10))
-                    .GET()
-                    .build();
 
-            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            // Используем RestTemplate
+            String jsonResponse = restTemplate.getForObject(url, String.class);
 
-            // логирование HTTP-ошибок
-            if (resp.statusCode() != 200) {
-                System.err.println("[parser] HTTP " + resp.statusCode() + " при загрузке страницы " + page);
-                return List.of();
-            }
+            if (jsonResponse == null) return List.of();
 
-            HabrResponse r = mapper.readValue(resp.body(), HabrResponse.class);
+            HabrResponse r = mapper.readValue(jsonResponse, HabrResponse.class);
             if (r == null || r.list == null) return List.of();
 
             return r.list.stream()

@@ -16,7 +16,7 @@ class VacancyRepositoryTest {
     @Test
     void shouldSaveAndFindVacancy() {
         Vacancy v = new Vacancy("ext-1", "Java Dev", "Company", "Москва", "100k", "Spring", "2026");
-        repository.save(v);
+        repository.saveAndFlush(v); // saveAndFlush, чтобы убедиться в записи
 
         assertNotNull(v.getId());
         assertEquals(1, repository.count());
@@ -24,7 +24,7 @@ class VacancyRepositoryTest {
 
     @Test
     void shouldCheckIfExistsByExternalId() {
-        repository.save(new Vacancy("ext-2", "Go Dev", "Company", "Питер", "", "", ""));
+        repository.saveAndFlush(new Vacancy("ext-2", "Go Dev", "Company", "Питер", "", "", ""));
 
         assertTrue(repository.existsByExternalId("ext-2"));
         assertFalse(repository.existsByExternalId("ext-999"));
